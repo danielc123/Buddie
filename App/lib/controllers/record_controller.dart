@@ -57,8 +57,10 @@ class RecordScreenController {
   String? deviceName;
   BluetoothConnectionState connectionState = BluetoothConnectionState.disconnected;
 
-  Future<void> load() async {
+  Future<void> load(BuildContext context) async {
     if (!await FlutterForegroundTask.isRunningService) {
+      final lang = Localizations.localeOf(context).languageCode;
+      await FlutterForegroundTask.saveData(key: 'lang', value: lang);
       await _initService();
       await startService();
       await Future.delayed(Duration(seconds: 1));

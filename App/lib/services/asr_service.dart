@@ -31,8 +31,7 @@ import 'package:app/constants/prompt_constants.dart';
 import 'package:app/constants/wakeword_constants.dart';
 import 'package:app/models/chat_mode.dart';
 import 'package:app/models/asr_mode.dart';
-
-import 'package:app/services/cloud_asr.dart';
+import 'package:app/services/openai_asr.dart';
 import 'package:app/utils/text_process_utils.dart';
 import 'package:app/utils/sp_util.dart';
 import 'package:flutter/foundation.dart';
@@ -141,12 +140,12 @@ class RecordServiceHandler extends TaskHandler {
 
   /// Whether to use cloud services (determined by current ASR mode)
   bool get _isUsingCloudServices {
-    return _currentAsrMode.isCloudBased && _cloudAsr.isAvailable;
+    return _currentAsrMode.isCloudBased && _openAiAsr.isAvailable;
   }
 
   /// Whether to use streaming ASR (determined by current ASR mode)
   bool get _shouldUseStreamingAsr {
-    return _currentAsrMode.isStreaming && _cloudAsr.canUseStream;
+    return _currentAsrMode.isStreaming;
   }
 
   bool _isInitialized = false;
@@ -161,7 +160,7 @@ class RecordServiceHandler extends TaskHandler {
   bool _kwsJustListen = false;
 
   late FlutterTts _flutterTts;
-  final CloudAsr _cloudAsr = CloudAsr();
+  final OpenAiAsr _openAiAsr = OpenAiAsr();
 
   final UnifiedChatManager _unifiedChatManager = UnifiedChatManager();
 
@@ -245,8 +244,13 @@ class RecordServiceHandler extends TaskHandler {
 
     await ObjectBoxService.initialize();
 
+    final lang = await FlutterForegroundTask.getData<String>(key: 'lang') ?? 'en';
+    final systemPromptOfChat = localizedPrompts[lang]!['systemPromptOfChat'];
+    final systemPromptOfScenario = localizedPrompts[lang]!['systemPromptOfScenario'];
+
     await _unifiedChatManager.init(
-      systemPrompt: '$systemPromptOfChat\n\n${systemPromptOfScenario['voice']}',
+      systemPrompt:
+          '$systemPromptOfChat\n\n${systemPromptOfScenario['voice']}',
     );
 
     iDctWeightMatrix = await loadRealMatrixFromJson(
@@ -269,8 +273,7 @@ class RecordServiceHandler extends TaskHandler {
     _initTts();
     _initBle();
 
-    await _cloudAsr.init();
-    _cloudAsr.onASRResult = onASRResult;
+    await _openAiAsr.init();
     await _startRecord();
     // await _cloudTts.init();
   }
@@ -407,9 +410,8 @@ class RecordServiceHandler extends TaskHandler {
       // Reset cloud ASR service, usually called after successful payment to get latest quota
       try {
         dev.log('正在重置云端ASR服务...');
-        _cloudAsr.dispose();
-        await _cloudAsr.init();
-        _cloudAsr.onASRResult = onASRResult;
+        _openAiAsr.dispose();
+        await _openAiAsr.init();
         dev.log('云端ASR服务重置完成');
         FlutterForegroundTask.sendDataToMain({'asrResetResult': 'success'});
       } catch (e) {
@@ -444,7 +446,7 @@ class RecordServiceHandler extends TaskHandler {
     _bleDataSubscription?.cancel();
     _bleAudioStreamSubscription?.cancel();
     _bleTimer?.cancel();
-    _cloudAsr.dispose();
+    _openAiAsr.dispose();
     BleService().dispose();
   }
 
@@ -611,6 +613,10 @@ class RecordServiceHandler extends TaskHandler {
   Future<void> _initTts() async {
     _flutterTts = FlutterTts();
     await _flutterTts.awaitSpeakCompletion(true);
+    final lang = await FlutterForegroundTask.getData<String>(key: 'lang') ?? 'en';
+    if (lang == 'es') {
+      await _flutterTts.setLanguage("es-ES");
+    }
     if (Platform.isAndroid) {
       await _flutterTts.setQueueMode(1);
     }
@@ -665,82 +671,6 @@ class RecordServiceHandler extends TaskHandler {
     _recordStream?.listen((data) {
       _processAudioData(data);
     });
-  }
-
-  void onASRResult(String data, bool isFinish) {
-    if (data.isNotEmpty) {
-      _flutterTts.stop();
-    }
-    if (isFinish) {
-      final operationId = Uuid().v1();
-      final text = data
-          .replaceFirst('Buddy', 'Buddie')
-          .replaceFirst('buddy', 'buddie')
-          .replaceFirst('body', 'buddie');
-      _processFinalAsrResult(text, operationId);
-    } else {
-      final text = data
-          .replaceFirst('Buddy', 'Buddie')
-          .replaceFirst('buddy', 'buddie')
-          .replaceFirst('body', 'buddie');
-      _processIntermediateAsrResult(text);
-    }
-  }
-
-  // 处理ASR中间结果（打字机效果）
-  void _processIntermediateAsrResult(String text) {
-    if (text.isEmpty) return;
-
-    // 如果没有当前消息ID，创建新的
-    if (_currentAsrMessageId == null) {
-      _currentAsrMessageId = Uuid().v4();
-    }
-
-    // 发送ASR流数据
-    FlutterForegroundTask.sendDataToMain({
-      'asrMessageId': _currentAsrMessageId,
-      'asrText': text,
-      'asrIsStreaming': true,
-      'asrIsEndpoint': false,
-      'inDialogMode': _inDialogMode,
-      'isMeeting': _isMeeting,
-      'speaker': 'user',
-      'isVadDetected': true,
-    });
-  }
-
-  // 处理ASR最终结果
-  void _processFinalAsrResult(String text, String? operationId) {
-    if (text.isEmpty) return;
-
-    text = text.trim();
-    text = TextProcessUtils.removeBracketsContent(text);
-    text = TextProcessUtils.clearIfRepeatedMoreThanFiveTimes(text);
-    text = text.trim();
-
-    if (text.isEmpty) {
-      return;
-    }
-
-    // 发送最终ASR数据
-    if (_currentAsrMessageId != null) {
-      FlutterForegroundTask.sendDataToMain({
-        'asrMessageId': _currentAsrMessageId,
-        'asrText': text,
-        'asrIsStreaming': false,
-        'asrIsEndpoint': true,
-        'inDialogMode': _inDialogMode,
-        'isMeeting': _isMeeting,
-        'speaker': 'user',
-        'isVadDetected': false,
-      });
-
-      // 重置状态
-      _currentAsrMessageId = null;
-    }
-
-    // 直接调用后续处理逻辑，不使用_processFinalResult避免重复
-    _handlePostAsrProcessing(text, operationId);
   }
 
   // 处理ASR后续逻辑（从_processFinalResult中提取出来）
@@ -842,12 +772,6 @@ class RecordServiceHandler extends TaskHandler {
 
     if (!_onRecording) return;
 
-    if (_shouldUseStreamingAsr) {
-      // 流式ASR模式：直接推送到云端流式处理（会议模式）
-      _cloudAsr.pushStreamData(data);
-      return;
-    }
-
     final samplesFloat32 = convertBytesToFloat32(Uint8List.fromList(data));
     _vad!.acceptWaveform(samplesFloat32);
     _keywordSpotterStream.acceptWaveform(
@@ -902,7 +826,7 @@ class RecordServiceHandler extends TaskHandler {
       if (_isUsingCloudServices) {
         // 云端ASR模式（对话模式）
         dev.log('使用云端ASR: ${_currentAsrMode.name}');
-        segment = await _cloudAsr.recognize(paddedSamples);
+        segment = await _openAiAsr.recognize(paddedSamples);
       } else {
         // 本地离线ASR模式（默认模式）
         dev.log('使用本地ASR: ${_currentAsrMode.name}');
@@ -913,7 +837,8 @@ class RecordServiceHandler extends TaskHandler {
       }
       segment = segment
           .replaceFirst('Buddy', 'Buddie')
-          .replaceFirst('buddy', 'buddie');
+          .replaceFirst('buddy', 'buddie')
+          .replaceFirst('body', 'buddie');
 
       text += segment;
 
@@ -1191,7 +1116,6 @@ class RecordServiceHandler extends TaskHandler {
     _currentChatSubscription?.cancel(); // 修改：使用新的订阅变量名
     _vad?.free();
     _asrServiceIsolate.stopRecord();
-    _cloudAsr.stopStream();
 
     // 重置状态
     _isProcessingChat = false;
