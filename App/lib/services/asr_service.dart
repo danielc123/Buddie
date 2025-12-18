@@ -31,8 +31,7 @@ import 'package:app/constants/prompt_constants.dart';
 import 'package:app/constants/wakeword_constants.dart';
 import 'package:app/models/chat_mode.dart';
 import 'package:app/models/asr_mode.dart';
-
-import 'package:app/services/cloud_asr.dart';
+import 'package:app/services/deepgram_asr.dart';
 import 'package:app/utils/text_process_utils.dart';
 import 'package:app/utils/sp_util.dart';
 import 'package:flutter/foundation.dart';
@@ -141,12 +140,12 @@ class RecordServiceHandler extends TaskHandler {
 
   /// Whether to use cloud services (determined by current ASR mode)
   bool get _isUsingCloudServices {
-    return _currentAsrMode.isCloudBased && _cloudAsr.isAvailable;
+    return _currentAsrMode.isCloudBased && _openAiAsr.isAvailable;
   }
 
   /// Whether to use streaming ASR (determined by current ASR mode)
   bool get _shouldUseStreamingAsr {
-    return _currentAsrMode.isStreaming && _cloudAsr.canUseStream;
+    return _currentAsrMode.isStreaming;
   }
 
   bool _isInitialized = false;
@@ -161,7 +160,7 @@ class RecordServiceHandler extends TaskHandler {
   bool _kwsJustListen = false;
 
   late FlutterTts _flutterTts;
-  final CloudAsr _cloudAsr = CloudAsr();
+  final DeepgramAsr _deepgramAsr = DeepgramAsr();
 
   final UnifiedChatManager _unifiedChatManager = UnifiedChatManager();
 
@@ -245,8 +244,13 @@ class RecordServiceHandler extends TaskHandler {
 
     await ObjectBoxService.initialize();
 
+    final lang = await FlutterForegroundTask.getData<String>(key: 'lang') ?? 'en';
+    final systemPromptOfChat = localizedPrompts[lang]!['systemPromptOfChat'];
+    final systemPromptOfScenario = localizedPrompts[lang]!['systemPromptOfScenario'];
+
     await _unifiedChatManager.init(
-      systemPrompt: '$systemPromptOfChat\n\n${systemPromptOfScenario['voice']}',
+      systemPrompt:
+          '$systemPromptOfChat\n\n${systemPromptOfScenario['voice']}',
     );
 
     iDctWeightMatrix = await loadRealMatrixFromJson(
@@ -269,8 +273,8 @@ class RecordServiceHandler extends TaskHandler {
     _initTts();
     _initBle();
 
-    await _cloudAsr.init();
-    _cloudAsr.onASRResult = onASRResult;
+    await _deepgramAsr.init();
+    _deepgramAsr.onResult = onASRResult;
     await _startRecord();
     // await _cloudTts.init();
   }
@@ -407,9 +411,9 @@ class RecordServiceHandler extends TaskHandler {
       // Reset cloud ASR service, usually called after successful payment to get latest quota
       try {
         dev.log('正在重置云端ASR服务...');
-        _cloudAsr.dispose();
-        await _cloudAsr.init();
-        _cloudAsr.onASRResult = onASRResult;
+        _deepgramAsr.dispose();
+        await _deepgramAsr.init();
+        _deepgramAsr.onResult = onASRResult;
         dev.log('云端ASR服务重置完成');
         FlutterForegroundTask.sendDataToMain({'asrResetResult': 'success'});
       } catch (e) {
@@ -444,7 +448,7 @@ class RecordServiceHandler extends TaskHandler {
     _bleDataSubscription?.cancel();
     _bleAudioStreamSubscription?.cancel();
     _bleTimer?.cancel();
-    _cloudAsr.dispose();
+    _deepgramAsr.dispose();
     BleService().dispose();
   }
 
@@ -611,6 +615,10 @@ class RecordServiceHandler extends TaskHandler {
   Future<void> _initTts() async {
     _flutterTts = FlutterTts();
     await _flutterTts.awaitSpeakCompletion(true);
+    final lang = await FlutterForegroundTask.getData<String>(key: 'lang') ?? 'en';
+    if (lang == 'es') {
+      await _flutterTts.setLanguage("es-ES");
+    }
     if (Platform.isAndroid) {
       await _flutterTts.setQueueMode(1);
     }
@@ -843,8 +851,12 @@ class RecordServiceHandler extends TaskHandler {
     if (!_onRecording) return;
 
     if (_shouldUseStreamingAsr) {
-      // 流式ASR模式：直接推送到云端流式处理（会议模式）
-      _cloudAsr.pushStreamData(data);
+      // The Deepgram service handles the stream directly, so we don't need to push data manually.
+      // We just need to ensure the stream is started.
+      if (_recordStream != null) {
+        final lang = await FlutterForegroundTask.getData<String>(key: 'lang') ?? 'en';
+        _deepgramAsr.startStreaming(_recordStream!, lang);
+      }
       return;
     }
 
@@ -899,11 +911,13 @@ class RecordServiceHandler extends TaskHandler {
       var segment = '';
 
       // 根据当前ASR模式选择识别方式
-      if (_isUsingCloudServices) {
-        // 云端ASR模式（对话模式）
-        dev.log('使用云端ASR: ${_currentAsrMode.name}');
-        segment = await _cloudAsr.recognize(paddedSamples);
-      } else {
+      if (_isUsingCloudServices && !_shouldUseStreamingAsr) {
+        // 云端ASR模式（对话模式）- No streaming
+        dev.log('使用云端ASR (no-streaming): ${_currentAsrMode.name}');
+        // This part needs a non-streaming ASR implementation if we want to support both modes.
+        // For now, we assume cloud services are always streaming.
+        // segment = await _deepgramAsr.recognize(paddedSamples);
+      } else if (!_isUsingCloudServices) {
         // 本地离线ASR模式（默认模式）
         dev.log('使用本地ASR: ${_currentAsrMode.name}');
 
@@ -913,7 +927,8 @@ class RecordServiceHandler extends TaskHandler {
       }
       segment = segment
           .replaceFirst('Buddy', 'Buddie')
-          .replaceFirst('buddy', 'buddie');
+          .replaceFirst('buddy', 'buddie')
+          .replaceFirst('body', 'buddie');
 
       text += segment;
 
@@ -1191,7 +1206,7 @@ class RecordServiceHandler extends TaskHandler {
     _currentChatSubscription?.cancel(); // 修改：使用新的订阅变量名
     _vad?.free();
     _asrServiceIsolate.stopRecord();
-    _cloudAsr.stopStream();
+    _deepgramAsr.stopStreaming();
 
     // 重置状态
     _isProcessingChat = false;

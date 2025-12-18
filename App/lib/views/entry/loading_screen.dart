@@ -25,7 +25,7 @@ class _LoadingScreenState extends State<LoadingScreen> {
 
   Future<void> _loadData() async {
     await Future.delayed(Duration(milliseconds: 500));
-    await _audioController.load();
+    await _audioController.load(context);
     await Future.delayed(Duration(seconds: 1));
     final prefs = await SharedPreferences.getInstance();
     final isFirstLaunch = prefs.getBool("isFirstLaunch") ?? true;
