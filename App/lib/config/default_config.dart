@@ -72,19 +72,11 @@ class DefaultConfig {
     '', // 空值表示没有默认值，用户必须配置
   );
 
-  // ===== 腾讯云ASR配置 =====
+  // ===== Deepgram ASR配置 =====
 
-  /// 默认腾讯云Secret ID
-  static String get defaultTencentSecretId =>
-      _getEnvValue('DEFAULT_TENCENT_SECRET_ID', '');
-
-  /// 默认腾讯云Secret Key
-  static String get defaultTencentSecretKey =>
-      _getEnvValue('DEFAULT_TENCENT_SECRET_KEY', '');
-
-  /// 默认腾讯云Token
-  static String get defaultTencentToken =>
-      _getEnvValue('DEFAULT_TENCENT_TOKEN', '');
+  /// 默认Deepgram API Key
+  static String get defaultDeepgramApiKey =>
+      _getEnvValue('DEFAULT_DEEPGRAM_API_KEY', '');
 
   // ===== 工具方法 =====
 

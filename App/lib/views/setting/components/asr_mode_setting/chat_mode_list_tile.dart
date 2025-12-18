@@ -13,8 +13,6 @@ class ChatModeListTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     String title = chatMode.getTitle(context);
-    final lang = Localizations.localeOf(context).languageCode;
-    final isSpanish = lang == 'es';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -24,8 +22,7 @@ class ChatModeListTile extends StatelessWidget {
           style: TextStyle(fontSize: 16.sp, fontWeight: FontWeight.w600, color: Colors.grey[700]),
         ),
         SizedBox(height: 8.h),
-        if (!isSpanish)
-          AsrModeListTile(chatMode: chatMode, asrMode: AsrMode.cloudStreaming),
+        AsrModeListTile(chatMode: chatMode, asrMode: AsrMode.cloudStreaming),
         AsrModeListTile(chatMode: chatMode, asrMode: AsrMode.cloudOnline),
         AsrModeListTile(chatMode: chatMode, asrMode: AsrMode.localOffline),
         SizedBox(height: 16.h),
