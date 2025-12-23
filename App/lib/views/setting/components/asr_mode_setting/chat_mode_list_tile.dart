@@ -13,7 +13,6 @@ class ChatModeListTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     String title = chatMode.getTitle(context);
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

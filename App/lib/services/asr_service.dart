@@ -1,24 +1,25 @@
-/// 自动语音转录模块
+/// Automatic Speech Transcription Module
 ///
-/// 该类作为 Flutter 前台服务的任务处理器，负责：
-/// 1. 初始化及管理所有依赖资源：
-///    - 配置与加载 ASR（本地/云）、VAD、关键字检测、TTS、BLE 设备
-///    - 启动 ObjectBox 数据库、加载LLM服务
-/// 2. 处理音频录制与流：
-///    - 管理录音、音频包解码、音频处理
-///    - 按需保存 WAV 文件
-///    - 基于 VAD 检测语音活动，推送音频数据到本地或云端 ASR
-/// 3. 支持对话/会议两种模式：
-///    - 自动识别并切换对话模式与会议模式
-/// 4. 集成 UnifiedChatManager：
-///    - 在对话模式下将 ASR 文本推送给 LLM，支持带音频的流式请求
-///    - 管理聊天流状态，处理响应并持久化助手/用户对话
-/// 5. 与前台任务通信：
-///    - 通过 FlutterForegroundTask.sendDataToMain 发送服务状态、ASR/VAD 事件、聊天内容
-///    - 响应来自主线程的控制命令（开始/停止录音、切换设备、重载配置等）
+/// This class acts as a task handler for the Flutter foreground service, responsible for:
+/// 1. Initializing and managing all dependent resources:
+///    - Configuring and loading ASR (local/cloud), VAD, keyword detection, TTS, BLE devices
+///    - Starting the ObjectBox database, loading the LLM service
+/// 2. Handling audio recording and streaming:
+///    - Managing recording, audio packet decoding, and audio processing
+///    - Saving WAV files as needed
+///    - Pushing audio data to local or cloud ASR based on VAD speech activity detection
+/// 3. Supporting conversation/meeting modes:
+///    - Automatically identifying and switching between conversation and meeting modes
+/// 4. Integrating UnifiedChatManager:
+///    - Pushing ASR text to the LLM in conversation mode, supporting streaming requests with audio
+///    - Managing chat stream status, processing responses, and persisting assistant/user conversations
+/// 5. Communicating with the foreground task:
+///    - Sending service status, ASR/VAD events, and chat content via FlutterForegroundTask.sendDataToMain
+///    - Responding to control commands from the main thread (start/stop recording, switch devices, reload configuration, etc.)
 ///
-/// 该处理器单例将在前台服务启动时通过 `startRecordService()` 注册，
-/// 生命周期严格与 FlutterForegroundTask 绑定，确保音频处理与任务处理逻辑在后台持续运行。
+/// This handler singleton will be registered via `startRecordService()` when the foreground service starts,
+/// with its lifecycle strictly bound to FlutterForegroundTask, ensuring that audio processing and task handling logic
+/// continue to run in the background.
 
 import 'dart:async';
 import 'dart:convert';
@@ -117,23 +118,23 @@ class RecordServiceHandler extends TaskHandler {
   /// Load user configured ASR mode from SharedPreferences
   Future<void> _loadUserAsrModeConfig() async {
     try {
-      final chatMode = _currentChatMode; // 获取当前聊天模式的快照
+      final chatMode = _currentChatMode; // Get a snapshot of the current chat mode
       final instance = await SharedPreferences.getInstance();
       await instance.reload();
       final asrModeKey = await SPUtil.getString('asr_mode_${chatMode.name}');
 
-      // 再次检查聊天模式是否发生变化，避免竞态条件
+      // Check again if the chat mode has changed to avoid race conditions
       if (chatMode != _currentChatMode) {
-        dev.log('聊天模式在配置加载过程中发生变化，重新加载配置');
-        return _loadUserAsrModeConfig(); // 递归重新加载
+        dev.log('Chat mode changed during configuration loading, reloading configuration');
+        return _loadUserAsrModeConfig(); // Recursively reload
       }
 
       _cachedUserAsrMode = AsrModeUtils.fromStorageKey(asrModeKey);
       dev.log(
-        '已加载用户ASR配置: ${_cachedUserAsrMode?.name ?? "使用默认"}，聊天模式: ${chatMode.name}',
+        'Loaded user ASR config: ${_cachedUserAsrMode?.name ?? "Using default"}, Chat mode: ${chatMode.name}',
       );
     } catch (e) {
-      dev.log('加载用户ASR配置失败: $e');
+      dev.log('Failed to load user ASR config: $e');
       _cachedUserAsrMode = null;
     }
   }
@@ -194,43 +195,43 @@ class RecordServiceHandler extends TaskHandler {
   int? _ffStartTime;
   int? _feStartTime;
 
-  // ASR流消息处理的字段
+// Fields for handling ASR stream messages
   String? _currentAsrMessageId;
-  StreamSubscription? _currentChatSubscription; // 重命名并独立管理聊天流订阅
-  bool _isProcessingChat = false; // 添加聊天处理状态标记
+StreamSubscription? _currentChatSubscription; // Rename and manage chat stream subscription independently
+bool _isProcessingChat = false; // Add a status flag for chat processing
 
-  // 新增：用于qwenOmni的音频保存
+// New: For saving audio for qwenOmni
 
-  /// 检查是否满足音频保存条件
-  /// 1. 当前LLM是qwenOmni
-  /// 2. 当前ASR模式是本地的ASR模式
-  /// 3. 在对话模式下
+/// Check if the conditions for saving audio are met
+/// 1. The current LLM is qwenOmni
+/// 2. The current ASR mode is the local ASR mode
+/// 3. In conversation mode
   bool _shouldSaveAudioForQwenOmni() {
     try {
-      // 检查当前LLM类型
+    // Check the current LLM type
       final currentLLMType = LLMFactory.instance.currentType;
       if (currentLLMType != LLMType.qwenOmni) {
         return false;
       }
 
-      // 检查是否在对话模式
+    // Check if in conversation mode
       if (!_inDialogMode) {
         return false;
       }
 
       return true;
     } catch (e) {
-      dev.log('检查音频保存条件时出错: $e');
+    dev.log('Error checking audio saving conditions: $e');
       return false;
     }
   }
 
-  /// 将Float32List转换为Uint8List (16位PCM格式)
+/// Convert Float32List to Uint8List (16-bit PCM format)
   Uint8List _convertFloat32ToUint8List(Float32List samples) {
-    final bytes = ByteData(samples.length * 2); // 每个样本2字节
+  final bytes = ByteData(samples.length * 2); // 2 bytes per sample
 
     for (int i = 0; i < samples.length; i++) {
-      // 将浮点值 (-1.0 to 1.0) 转换为 16位整数 (-32768 to 32767)
+    // Convert float value (-1.0 to 1.0) to a 16-bit integer (-32768 to 32767)
       int intSample = (samples[i] * 32767).round().clamp(-32768, 32767);
       bytes.setInt16(i * 2, intSample, Endian.little);
     }
@@ -267,7 +268,7 @@ class RecordServiceHandler extends TaskHandler {
     initOpus(await opus_flutter.load());
     opusDecoder = SimpleOpusDecoder(sampleRate: 16000, channels: 1);
 
-    // 初始化用户配置的ASR模式缓存
+    // Initialize user-configured ASR mode cache
     await _loadUserAsrModeConfig();
 
     _initTts();
@@ -294,20 +295,20 @@ class RecordServiceHandler extends TaskHandler {
       // Handle LLM configuration reload command (when settings change)
       if (data['action'] == 'reloadLLMConfig') {
         try {
-          dev.log('后台服务: 收到LLM配置重载请求');
+          dev.log('Background service: Received LLM config reload request');
 
-          // 重新加载LLMFactory配置
+          // Reload LLMFactory configuration
           await LLMFactory.instance.reloadLLMConfig();
 
-          // 重新初始化聊天管理器中的LLM
+          // Reinitialize the LLM in the chat manager
           await _unifiedChatManager.reinitializeLLM();
 
-          // 获取当前LLM状态并反馈给前端
+          // Get the current LLM status and send it to the frontend
           final currentLLMType = LLMFactory.instance.currentType;
           final availableTypes = await LLMFactory.getAvailableLLMTypes();
           final supportsAudioInput = LLMFactory.instance.supportsAudioInput;
 
-          dev.log('后台服务: LLM配置重载完成，当前类型: ${currentLLMType?.name}');
+          dev.log('Background service: LLM config reload complete, current type: ${currentLLMType?.name}');
 
           FlutterForegroundTask.sendDataToMain({
             'llmConfigReloaded': true,
@@ -330,9 +331,9 @@ class RecordServiceHandler extends TaskHandler {
         final llmTypeName = data['llmType'] as String?;
         if (llmTypeName != null) {
           try {
-            dev.log('后台服务: 收到LLM类型切换请求: $llmTypeName');
+            dev.log('Background service: Received LLM type switch request: $llmTypeName');
 
-            // 解析LLM类型
+            // Parse LLM type
             LLMType? targetType;
             switch (llmTypeName) {
               case 'customLLM':
@@ -358,10 +359,10 @@ class RecordServiceHandler extends TaskHandler {
                 'supportsAudioInput': LLMFactory.instance.supportsAudioInput,
               });
             } else {
-              throw Exception('无效的LLM类型: $llmTypeName');
+              throw Exception('Invalid LLM type: $llmTypeName');
             }
           } catch (e) {
-            dev.log('后台服务: LLM类型切换失败: $e');
+            dev.log('Background service: LLM type switch failed: $e');
             FlutterForegroundTask.sendDataToMain({
               'llmSwitchResult': 'failed',
               'error': e.toString(),
@@ -914,9 +915,8 @@ class RecordServiceHandler extends TaskHandler {
       if (_isUsingCloudServices && !_shouldUseStreamingAsr) {
         // 云端ASR模式（对话模式）- No streaming
         dev.log('使用云端ASR (no-streaming): ${_currentAsrMode.name}');
-        // This part needs a non-streaming ASR implementation if we want to support both modes.
-        // For now, we assume cloud services are always streaming.
-        // segment = await _deepgramAsr.recognize(paddedSamples);
+        final lang = await FlutterForegroundTask.getData<String>(key: 'lang') ?? 'en';
+        segment = await _deepgramAsr.recognize(paddedSamples, lang);
       } else if (!_isUsingCloudServices) {
         // 本地离线ASR模式（默认模式）
         dev.log('使用本地ASR: ${_currentAsrMode.name}');
