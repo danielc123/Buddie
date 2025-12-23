@@ -64,4 +64,36 @@ class DeepgramAsr {
   void dispose() {
     stopStreaming();
   }
+
+  Future<String> recognize(Float32List audioData, String lang) async {
+    if (_deepgram == null || !isAvailable) {
+      dev.log("Deepgram not initialized");
+      return '';
+    }
+
+    final params = {
+      'language': lang,
+      'encoding': 'linear16',
+      'sample_rate': 16000,
+    };
+
+    final audioBytes = _float32ListToUint8List(audioData);
+
+    try {
+      final res = await _deepgram!.listen.bytes(audioBytes, queryParams: params);
+      return res.transcript ?? '';
+    } catch (e) {
+      dev.log('Deepgram recognize error: $e');
+      return '';
+    }
+  }
+
+  Uint8List _float32ListToUint8List(Float32List float32list) {
+    final byteData = ByteData(float32list.length * 2);
+    for (int i = 0; i < float32list.length; i++) {
+      final sample = (float32list[i] * 32767).toInt();
+      byteData.setInt16(i * 2, sample, Endian.little);
+    }
+    return byteData.buffer.asUint8List();
+  }
 }
