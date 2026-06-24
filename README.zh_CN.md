@@ -12,7 +12,7 @@
 
 # 🤖 BUDDIE.AI
 
-## 🎯 打造真正懂你的 AI 伙伴
+## 🎯 打造真正懂你的 AI- 伙伴
 
 <p align="center">
   <a href="https://bud.inc">你好，Buddie</a> ·
